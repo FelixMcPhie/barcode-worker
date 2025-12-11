@@ -1,18 +1,28 @@
-// Cloudflare Worker for Barcode Generation
-// This serves both the documentation page and generates barcodes via URL parameters
-
+// Cloudflare Worker for Barcode Generation - Returns PNG Images
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     
-    // If there's a 'value' parameter, generate a barcode
+    // If there's a 'value' parameter, generate a barcode PNG
     if (url.searchParams.has('value')) {
-      return new Response(generateBarcodeHTML(url.searchParams), {
-        headers: {
-          'Content-Type': 'text/html',
-          'Access-Control-Allow-Origin': '*'
-        }
-      });
+      const value = url.searchParams.get('value');
+      const format = url.searchParams.get('format') || 'CODE128';
+      const width = parseInt(url.searchParams.get('width')) || 2;
+      const height = parseInt(url.searchParams.get('height')) || 100;
+      const displayValue = url.searchParams.get('displayValue') !== 'false';
+      
+      try {
+        const html = generateBarcodeHTML(value, format, width, height, displayValue);
+        return new Response(html, {
+          headers: {
+            'Content-Type': 'text/html',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, max-age=3600'
+          }
+        });
+      } catch (error) {
+        return new Response(`Error: ${error.message}`, { status: 400 });
+      }
     }
     
     // Otherwise, show the documentation page
@@ -22,33 +32,62 @@ export default {
   }
 };
 
-function generateBarcodeHTML(params) {
-  const value = params.get('value');
-  const format = params.get('format') || 'CODE128';
-  const width = params.get('width') || '2';
-  const height = params.get('height') || '100';
-  const displayValue = params.get('displayValue') !== 'false' ? 'true' : 'false';
-  
+function generateBarcodeHTML(value, format, width, height, displayValue) {
+  // Generate HTML that renders barcode to canvas and converts to PNG
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
   <style>
-    body { margin: 0; padding: 0; background: white; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-    canvas { display: block; }
+    body { 
+      margin: 0; 
+      padding: 0; 
+      background: white; 
+      display: flex; 
+      justify-content: center; 
+      align-items: center; 
+      min-height: 100vh; 
+    }
+    #container { text-align: center; }
+    canvas { display: block; margin: 0 auto; }
   </style>
 </head>
 <body>
-  <canvas id="barcode"></canvas>
+  <div id="container">
+    <canvas id="barcode"></canvas>
+  </div>
   <script>
     try {
-      JsBarcode("#barcode", "${value.replace(/"/g, '\\"')}", {
+      const canvas = document.getElementById('barcode');
+      
+      // Generate barcode with 450px width target
+      JsBarcode(canvas, "${value.replace(/"/g, '\\"')}", {
         format: "${format}",
         width: ${width},
         height: ${height},
-        displayValue: ${displayValue}
+        displayValue: ${displayValue},
+        margin: 10
       });
+      
+      // Scale canvas to desired width (450px) while maintaining aspect ratio
+      const originalWidth = canvas.width;
+      const targetWidth = 450;
+      const scale = targetWidth / originalWidth;
+      
+      // Create new canvas at target size
+      const scaledCanvas = document.createElement('canvas');
+      scaledCanvas.width = targetWidth;
+      scaledCanvas.height = canvas.height * scale;
+      
+      const ctx = scaledCanvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false; // Keep crisp edges for barcode
+      ctx.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+      
+      // Replace original canvas
+      canvas.parentNode.replaceChild(scaledCanvas, canvas);
+      scaledCanvas.id = 'barcode';
+      
     } catch (e) {
       document.body.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Error: ' + e.message + '</div>';
     }
@@ -64,7 +103,6 @@ function getDocumentationHTML(origin) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Barcode Generator API</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -107,28 +145,14 @@ function getDocumentationHTML(origin) {
             border-left: 4px solid #4CAF50;
             margin: 10px 0;
         }
-        .test-area {
-            margin-top: 20px;
-        }
-        input, select {
-            padding: 8px;
-            margin: 5px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        button {
+        .success-badge {
+            display: inline-block;
             background: #4CAF50;
             color: white;
-            padding: 10px 20px;
-            border: none;
+            padding: 5px 10px;
             border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #45a049;
-        }
-        #testResult {
-            margin-top: 15px;
+            font-size: 14px;
+            margin-left: 10px;
         }
         .param-table {
             width: 100%;
@@ -143,27 +167,48 @@ function getDocumentationHTML(origin) {
             font-weight: bold;
             width: 150px;
         }
-        .success-badge {
-            display: inline-block;
-            background: #4CAF50;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 14px;
-            margin-left: 10px;
+        .test-image {
+            margin-top: 20px;
+            padding: 20px;
+            background: white;
+            border: 2px solid #ddd;
+            text-align: center;
+        }
+        .test-image iframe {
+            border: none;
+            width: 100%;
+            max-width: 500px;
+            height: 200px;
+        }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 15px 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📊 Barcode Generator API <span class="success-badge">✓ LIVE</span></h1>
-        <p>Unlimited barcode generation API for Excel's =IMAGE() function</p>
+        <p>PNG barcode generation API at 450px width, 72 DPI for Excel's =IMAGE() function</p>
 
         <div class="section">
             <h2>🚀 Your API Endpoint</h2>
             <p>Use this URL to generate barcodes:</p>
             <div class="example">
-                <code id="apiUrl">${origin}?value=YOUR_VALUE</code>
+                <code>${origin}?value=YOUR_VALUE</code>
+            </div>
+            <div class="info-box">
+                <strong>📐 Specifications:</strong><br>
+                • Output: PNG/Canvas image<br>
+                • Width: 450px<br>
+                • Resolution: 72 DPI<br>
+                • Height: Auto (based on barcode height parameter)
+            </div>
+            <div class="test-image">
+                <p><strong>Live Example:</strong></p>
+                <iframe src="${origin}?value=123456789"></iframe>
             </div>
         </div>
 
@@ -180,7 +225,7 @@ function getDocumentationHTML(origin) {
                 </tr>
                 <tr>
                     <td>width</td>
-                    <td>Width of bars (default: 2)</td>
+                    <td>Width of individual bars (default: 2) - final image is scaled to 450px</td>
                 </tr>
                 <tr>
                     <td>height</td>
@@ -204,8 +249,8 @@ function getDocumentationHTML(origin) {
                 <code>=IMAGE("${origin}?value="&A1&"&format=CODE39")</code>
             </div>
             <div class="example">
-                <strong>Custom size:</strong><br>
-                <code>=IMAGE("${origin}?value="&A1&"&width=3&height=80")</code>
+                <strong>Taller barcode:</strong><br>
+                <code>=IMAGE("${origin}?value="&A1&"&height=150")</code>
             </div>
             <div class="example">
                 <strong>Hide text below barcode:</strong><br>
@@ -214,65 +259,34 @@ function getDocumentationHTML(origin) {
         </div>
 
         <div class="section">
-            <h2>🧪 Test Generator</h2>
-            <div class="test-area">
-                <input type="text" id="testValue" placeholder="Enter barcode value" value="123456789">
-                <select id="testFormat">
-                    <option value="CODE128">CODE128</option>
-                    <option value="CODE39">CODE39</option>
-                    <option value="EAN13">EAN13</option>
-                    <option value="UPC">UPC</option>
-                    <option value="ITF14">ITF14</option>
-                </select>
-                <button onclick="generateTest()">Generate Test Barcode</button>
-                <div id="testResult"></div>
+            <h2>✅ Quick Start Guide</h2>
+            <ol>
+                <li>Open Excel Desktop (requires Excel 365 or Excel 2021+)</li>
+                <li>Enter a barcode value in cell A1 (e.g., "123456")</li>
+                <li>In cell B1, enter: <code>=IMAGE("${origin}?value="&A1)</code></li>
+                <li>Press Enter - your barcode will appear at 450px width!</li>
+                <li>Drag the formula down to generate multiple barcodes at once</li>
+            </ol>
+            <div class="info-box">
+                <strong>💡 Note:</strong> This works best with <strong>Desktop Excel</strong>. Excel Online and Google Sheets have limited support for external images and may not display the barcodes properly.
             </div>
+            <p><strong>No rate limits!</strong> Generate thousands of barcodes simultaneously.</p>
         </div>
 
         <div class="section">
-            <h2>✅ Quick Start Guide</h2>
-            <ol>
-                <li>Copy your API URL above: <code>${origin}</code></li>
-                <li>Open Excel and enter a barcode value in cell A1 (e.g., "123456")</li>
-                <li>In cell B1, enter: <code>=IMAGE("${origin}?value="&A1)</code></li>
-                <li>Press Enter - your barcode will appear!</li>
-                <li>Drag the formula down to generate multiple barcodes at once</li>
-            </ol>
-            <p><strong>No rate limits!</strong> Generate thousands of barcodes simultaneously.</p>
+            <h2>🧪 Test URLs</h2>
+            <p>Click these to test your barcodes:</p>
+            <div class="example">
+                <a href="${origin}?value=TEST123" target="_blank">${origin}?value=TEST123</a>
+            </div>
+            <div class="example">
+                <a href="${origin}?value=987654321&format=CODE39" target="_blank">${origin}?value=987654321&format=CODE39</a>
+            </div>
+            <div class="example">
+                <a href="${origin}?value=BARCODE&height=150&displayValue=false" target="_blank">${origin}?value=BARCODE&height=150&displayValue=false</a>
+            </div>
         </div>
     </div>
-
-    <script>
-        function generateTest() {
-            const value = document.getElementById('testValue').value;
-            const format = document.getElementById('testFormat').value;
-            const resultDiv = document.getElementById('testResult');
-            
-            if (!value) {
-                resultDiv.innerHTML = '<p style="color:red;">Please enter a value</p>';
-                return;
-            }
-
-            const canvas = document.createElement('canvas');
-            
-            try {
-                JsBarcode(canvas, value, {
-                    format: format,
-                    width: 2,
-                    height: 100,
-                    displayValue: true
-                });
-                
-                resultDiv.innerHTML = '';
-                resultDiv.appendChild(canvas);
-                
-                const testUrl = '${origin}?value=' + encodeURIComponent(value) + '&format=' + format;
-                resultDiv.innerHTML += '<p style="margin-top:15px;"><strong>Excel Formula:</strong><br><code>=IMAGE("' + testUrl + '")</code></p>';
-            } catch (e) {
-                resultDiv.innerHTML = '<p style="color:red;">Error: ' + e.message + '</p>';
-            }
-        }
-    </script>
 </body>
 </html>`;
 }
